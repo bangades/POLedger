@@ -676,7 +676,7 @@ if(typeof pdfjsLib !== 'undefined'){
    Paste your deployed Web App URL below, ending in /exec.
    See setup instructions provided alongside this file.
    ==================================================================== */
-const API_URL = 'https://script.google.com/macros/s/AKfycby7AfwRMLpj5tUfOhvJPRtPheauAzQY7BIxVEWlE96J3dSRnjC4EaEjxVcgxwP4OrJEEQ/exec';
+const API_URL = 'PASTE_YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE';
 
 let records = [];
 let isSyncing = false;
@@ -688,17 +688,18 @@ function apiConfigured(){
 async function fetchRecordsFromServer(){
   if(!apiConfigured()){
     toast('API_URL belum diatur — lihat instruksi setup Google Sheets.');
-    return [];
+    return null;
   }
   try{
     const res = await fetch(API_URL + '?t=' + Date.now());
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
-    return Array.isArray(data.records) ? data.records : [];
+    if(!Array.isArray(data.records)) throw new Error('Unexpected response shape');
+    return data.records;
   }catch(err){
     console.error('Failed to fetch records', err);
-    toast('Gagal memuat data dari server. Cek koneksi atau URL API.');
-    return [];
+    toast('Gagal memuat data dari server. Cek koneksi/izin akses API.');
+    return null;
   }
 }
 
@@ -728,9 +729,15 @@ async function saveRecordsToServer(){
 async function refreshFromServer(){
   const btn = document.getElementById('refreshBtn');
   btn.classList.add('spinning');
-  records = await fetchRecordsFromServer();
-  render();
+  const result = await fetchRecordsFromServer();
   btn.classList.remove('spinning');
+  if(result === null){
+    // Fetch failed — keep whatever is currently shown instead of wiping it out.
+    toast('Gagal memuat ulang. Data yang tampil saat ini tidak diubah.');
+    return;
+  }
+  records = result;
+  render();
   toast('Data diperbarui.');
 }
 
@@ -867,16 +874,24 @@ function parsePoText(text, filename){
 }
 
 function parseDMY(str){
-  // "31-Aug-2026" -> Date
   if(!str || str === '—') return null;
+  str = String(str).trim();
+  // Standard app format: "31-Aug-2026"
   const months = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
-  const parts = str.split('-');
-  if(parts.length !== 3) return null;
-  const day = parseInt(parts[0],10);
-  const month = months[parts[1]];
-  const year = parseInt(parts[2],10);
-  if(month === undefined) return null;
-  return new Date(year, month, day);
+  const dmyMatch = str.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+  if(dmyMatch){
+    const day = parseInt(dmyMatch[1],10);
+    const month = months[dmyMatch[2]];
+    const year = parseInt(dmyMatch[3],10);
+    if(month !== undefined) return new Date(year, month, day);
+  }
+  // Defensive fallback: if a date ever arrives as an ISO string (e.g. "2026-08-31T00:00:00.000Z"),
+  // such as from a spreadsheet backend that silently converted a text date into a real Date cell.
+  const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(isoMatch){
+    return new Date(parseInt(isoMatch[1],10), parseInt(isoMatch[2],10)-1, parseInt(isoMatch[3],10));
+  }
+  return null;
 }
 
 function getStatus(record){
@@ -1335,7 +1350,12 @@ async function init(){
     document.getElementById('emptyMsg').textContent = 'API_URL belum diatur di dalam file. Lihat instruksi setup Google Sheets.';
     return;
   }
-  records = await fetchRecordsFromServer();
+  const result = await fetchRecordsFromServer();
+  if(result === null){
+    document.getElementById('emptyMsg').innerHTML = 'Gagal memuat data dari server. Cek koneksi/izin akses API, lalu <button class="ghost-btn" style="padding:4px 10px; font-size:12px;" onclick="location.reload()">Coba Lagi</button>';
+    return;
+  }
+  records = result;
   render();
 }
 init();
