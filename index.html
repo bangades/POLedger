@@ -477,6 +477,9 @@
   .icon-btn svg{width:14px; height:14px;}
   .icon-btn:hover{background:var(--line); color:var(--ink);}
   .icon-btn.danger:hover{background:var(--danger); color:#fff; border-color:var(--danger);}
+  .icon-btn.view-btn:hover{background:var(--teal); color:#fff; border-color:var(--teal);}
+  .icon-btn.no-file{opacity:.35; cursor:not-allowed;}
+  .icon-btn.no-file:hover{background:none; color:var(--ink-soft); border-color:var(--line-strong);}
 </style>
 </head>
 <body>
@@ -640,6 +643,11 @@
             <div class="val" id="rf-realisasiPct" style="font-family:var(--mono); padding-top:6px;">0%</div>
           </div>
         </div>
+        <h4>File PO (PDF)</h4>
+        <div class="modal-field full" style="margin-bottom:22px;">
+          <div class="val" id="rf-fileStatus" style="font-size:13px; margin-bottom:8px;"></div>
+          <input type="file" id="rf-fileInput" class="rf-input" accept="application/pdf">
+        </div>
       </div>
 
       <div class="modal-actions" style="gap:10px;">
@@ -676,7 +684,7 @@ if(typeof pdfjsLib !== 'undefined'){
    Paste your deployed Web App URL below, ending in /exec.
    See setup instructions provided alongside this file.
    ==================================================================== */
-const API_URL = 'https://script.google.com/macros/s/AKfycby7AfwRMLpj5tUfOhvJPRtPheauAzQY7BIxVEWlE96J3dSRnjC4EaEjxVcgxwP4OrJEEQ/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbzDLg-XivUyYAbGN9Ci_maV3Kr2sQkQwO5lZrCVl0Jz2LLJ6TSioJNsg0uma1PoJ1fJ/exec';
 
 let records = [];
 let isSyncing = false;
@@ -723,6 +731,72 @@ async function saveRecordsToServer(){
     return false;
   }finally{
     isSyncing = false;
+  }
+}
+
+/* ---------- PDF FILE STORAGE (Google Drive via Apps Script) ---------- */
+function fileToBase64(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = () => reject(reader.error || new Error('read failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+// Returns the Drive fileId on success, or null on failure.
+async function uploadPdfToServer(file){
+  if(!apiConfigured()) return null;
+  try{
+    const data = await fileToBase64(file);
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'text/plain;charset=utf-8'},
+      body: JSON.stringify({ action: 'uploadFile', filename: file.name, data })
+    });
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const json = await res.json();
+    if(!json.success || !json.fileId) throw new Error(json.error || 'upload gagal');
+    return json.fileId;
+  }catch(err){
+    console.error('Failed to upload PDF', err);
+    return null;
+  }
+}
+
+async function viewPo(id){
+  const r = records.find(x => x.id === id);
+  if(!r) return;
+  if(!r.fileId){
+    toast('File PDF PO ini belum tersimpan. Lampirkan lewat tombol Edit.');
+    return;
+  }
+  // Open the tab synchronously (inside the click) so mobile/desktop popup blockers allow it.
+  const win = window.open('', '_blank');
+  try{ if(win) win.document.write('<p style="font-family:sans-serif;padding:24px;">Memuat file PO...</p>'); }catch(e){}
+  toast('Memuat file PO...');
+  try{
+    const res = await fetch(API_URL + '?action=getFile&id=' + encodeURIComponent(r.fileId) + '&t=' + Date.now());
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const json = await res.json();
+    if(!json.success || !json.data) throw new Error(json.error || 'file tidak ditemukan');
+    const bin = atob(json.data);
+    const bytes = new Uint8Array(bin.length);
+    for(let i=0; i<bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([bytes], {type:'application/pdf'}));
+    if(win){
+      win.location.href = url;
+    } else {
+      // Popup was blocked: fall back to a direct download.
+      const a = document.createElement('a');
+      a.href = url; a.download = json.name || (r.poNumber + '.pdf');
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 5 * 60 * 1000);
+  }catch(err){
+    console.error('Failed to view PO file', err);
+    if(win) try{ win.close(); }catch(e){}
+    toast('Gagal membuka file PO. Cek koneksi atau izin akses API.');
   }
 }
 
@@ -1024,6 +1098,9 @@ function renderTable(){
       <td><span class="status-pill status-${status}">${status}</span></td>
       <td>
         <div class="row-actions">
+          <button class="icon-btn view-btn ${r.fileId ? '' : 'no-file'}" data-id="${r.id}" title="${r.fileId ? 'Lihat file PO' : 'File PDF belum tersimpan (lampirkan lewat Edit)'}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
           <button class="icon-btn edit-btn" data-id="${r.id}" title="Edit PO">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
           </button>
@@ -1037,6 +1114,9 @@ function renderTable(){
 
   tbody.querySelectorAll('tr').forEach(tr => {
     tr.addEventListener('click', () => openModal(tr.dataset.id));
+  });
+  tbody.querySelectorAll('.view-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); viewPo(btn.dataset.id); });
   });
   tbody.querySelectorAll('.edit-btn').forEach(btn => {
     btn.addEventListener('click', (e) => { e.stopPropagation(); editRecord(btn.dataset.id); });
@@ -1197,6 +1277,10 @@ function showReviewForm(record, mode){
     }
 
     if(mode === 'edit'){
+      document.getElementById('rf-fileInput').value = '';
+      document.getElementById('rf-fileStatus').textContent = record.fileId
+        ? 'File PDF tersimpan. Pilih file baru di bawah hanya jika ingin menggantinya.'
+        : 'Belum ada file PDF tersimpan untuk PO ini. Pilih file di bawah untuk melampirkan.';
       realisasiWrap.style.display = 'block';
       updateRealisasiPct();
       realisasiInput.addEventListener('input', updateRealisasiPct);
@@ -1224,6 +1308,10 @@ function showReviewForm(record, mode){
         shortScope: document.getElementById('rf-shortScope').value.trim(),
         realisasi: parseInt(document.getElementById('rf-realisasi').value.replace(/,/g,''), 10) || 0,
       };
+      if(mode === 'edit'){
+        const attach = document.getElementById('rf-fileInput').files[0];
+        if(attach) edited._attachFile = attach;
+      }
       cleanup(edited);
     }
     function onCancel(){ cleanup(null); }
@@ -1272,6 +1360,14 @@ async function handleFiles(fileList){
         continue;
       }
 
+      toast('Menyimpan file PDF...');
+      const fileId = await uploadPdfToServer(file);
+      if(fileId){
+        edited.fileId = fileId;
+      } else {
+        toast('PO tersimpan, tapi file PDF gagal diupload. Bisa dilampirkan lewat Edit.');
+      }
+
       records.push(edited);
       successCount++;
     }catch(err){
@@ -1300,6 +1396,17 @@ async function editRecord(id){
   if(!edited) return;
   const idx = records.findIndex(r => r.id === id);
   if(idx > -1){
+    const attach = edited._attachFile;
+    delete edited._attachFile;
+    if(attach){
+      toast('Mengupload file PDF...');
+      const fileId = await uploadPdfToServer(attach);
+      if(fileId){
+        edited.fileId = fileId;
+      } else {
+        toast('File PDF gagal diupload. Data lainnya tetap disimpan.');
+      }
+    }
     records[idx] = {...edited, id: original.id, filename: original.filename};
     render();
     toast('Menyimpan...');
